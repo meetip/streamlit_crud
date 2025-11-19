@@ -5,7 +5,7 @@ from typing import List, Dict
 # Page config
 st.set_page_config(page_title="MCQ Review App", layout="wide")
 
-# Custom CSS for larger fonts
+# Custom CSS for larger fonts and wider sidebar
 st.markdown("""
 <style>
     .stMarkdown, .stText {
@@ -25,6 +25,13 @@ st.markdown("""
     }
     div[data-testid="stMarkdownContainer"] p {
         font-size: 1.2rem;
+    }
+    /* Wider sidebar to show full dropdown text */
+    section[data-testid="stSidebar"] {
+        width: 450px !important;
+    }
+    section[data-testid="stSidebar"] > div {
+        width: 450px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -54,6 +61,20 @@ def save_data(data: List[Dict]):
 def main():
     st.title("📚 MCQ Review Application")
 
+    # Chapter names dictionary
+    chapter_names = {
+        1: "How Large-Scale AI Works (อ.เติ้ล)",
+        2: "What AI Is Good At – And Why It Sometimes Fails (อ.โรเจอร์)",
+        3: "Can We Trust AI to Be Fair? (อ.เติ้ล)",
+        4: "How to Evaluate AI Outputs (อ.ม่วย)",
+        5: "Trusting Information in the Age of AI (อ.ม่วย)",
+        6: "Personalization: Algorithms That Learn What You Like (อ.ยุ้ย)",
+        7: "AI for All: Accessibility and Inclusion (อ.เม้ง อ.ปิงปอง)",
+        8: "Understanding AI and Emotion (อ.เม้ง อ.ปิงปอง)",
+        9: "Case Studies: How Thai Educators Are Using AI (อ.แจว อ.โบ)",
+        10: "The Future of Responsible AI for Everyone (อ.สิริวุฒิ)"
+    }
+
     # Load questions
     questions = load_data()
 
@@ -69,7 +90,7 @@ def main():
     selected_chapter = st.sidebar.selectbox(
         "Choose a chapter:",
         chapters,
-        format_func=lambda x: f"Chapter {x}"
+        format_func=lambda x: f"Chapter {x}: {chapter_names.get(x, 'Unknown')}"
     )
 
     # Filter questions by chapter
