@@ -1,6 +1,10 @@
 import streamlit as st
 import json
+import os
 from typing import List, Dict
+
+# Default Google Sheet ID (from user-provided link). If you prefer, set env var SHEET_ID to override.
+SHEET_ID_DEFAULT = "1aBQwOqcUWyaL3TZ0dFBGUL4e4o7IJr2y_YipN_Z1jcI"
 
 # Page config
 st.set_page_config(page_title="MCQ Review App", layout="wide")
@@ -36,24 +40,176 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Load data
+# Load / Save data
+
+
+def _load_from_json(path: str = "data.json") -> List[Dict]:
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
+
+
+def _save_to_json(data: List[Dict], path: str = "data.json") -> None:
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 @st.cache_data
-def load_data():
-    try:
-        with open('data.json', 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        st.error("data.json not found!")
-        return []
+def load_data() -> List[Dict]:
+    """Try to load data from Google Sheets if configured, otherwise fall back to local data.json.
 
-# Save data
+    To use Google Sheets, set env vars `SHEET_ID` and `SERVICE_ACCOUNT_FILE` (path to JSON key).
+    The sheet should have a header row with column names matching the JSON keys (e.g., Chapter, คำถาม, ตัวเลือก A, ...).
+    """
+    # Determine sheet_id and credentials source: env vars, Streamlit secrets, or default
+    sheet_id = os.environ.get('SHEET_ID') or (
+        st.secrets.get('SHEET_ID') if st.secrets else None)
+    if not sheet_id:
+        sheet_id = SHEET_ID_DEFAULT
+
+    # Credentials: prefer Streamlit secrets (service account JSON as dict or string), then env file
+    service_info = None
+    if st.secrets and ('gcp_service_account' in st.secrets or 'SERVICE_ACCOUNT' in st.secrets or 'service_account' in st.secrets):
+        # support both nested dict and raw JSON string
+        for key in ('gcp_service_account', 'SERVICE_ACCOUNT', 'service_account'):
+            if key in st.secrets:
+                service_info = st.secrets[key]
+                break
+
+    service_file = os.environ.get('SERVICE_ACCOUNT_FILE')
+
+    # If we have either a service file or service_info, try Sheets
+    if (sheet_id) and (service_info or (service_file and os.path.exists(service_file))):
+        try:
+            import gspread
+            try:
+                # prefer in-memory info
+                from google.oauth2.service_account import Credentials
+            except Exception:
+                Credentials = None
+
+            scopes = ['https://www.googleapis.com/auth/spreadsheets']
+
+            if service_info:
+                # If service_info is a JSON string, parse it
+                if isinstance(service_info, str):
+                    try:
+                        service_info = json.loads(service_info)
+                    except Exception:
+                        pass
+
+                creds = Credentials.from_service_account_info(
+                    service_info, scopes=scopes)
+            else:
+                creds = Credentials.from_service_account_file(
+                    service_file, scopes=scopes)
+
+            gc = gspread.authorize(creds)
+            sh = gc.open_by_key(sheet_id)
+            ws = sh.sheet1
+            records = ws.get_all_records()
+
+            # Normalize types: ensure Chapter is int where possible
+            for r in records:
+                if 'Chapter' in r:
+                    try:
+                        r['Chapter'] = int(r['Chapter'])
+                    except Exception:
+                        pass
+                # Normalize empty strings to None for optional fields
+                for k, v in list(r.items()):
+                    if isinstance(v, str) and v.strip() == '':
+                        r[k] = None
+
+            return records
+        except Exception as e:
+            # If Sheets loading fails, fall back to JSON but show a warning
+            st.warning(
+                f"Could not load from Google Sheets: {e}. Falling back to data.json.")
+            return _load_from_json()
+
+    # Default fallback
+    return _load_from_json()
 
 
-def save_data(data: List[Dict]):
-    with open('data.json', 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def save_data(data: List[Dict]) -> None:
+    """Save to Google Sheets if configured, else to `data.json`.
+
+    WARNING: When saving to a Google Sheet this will overwrite the sheet contents.
+    """
+    # Resolve sheet id and credentials (support Streamlit Cloud secrets)
+    sheet_id = os.environ.get('SHEET_ID') or (
+        st.secrets.get('SHEET_ID') if st.secrets else None)
+    if not sheet_id:
+        sheet_id = SHEET_ID_DEFAULT
+
+    service_info = None
+    if st.secrets and ('gcp_service_account' in st.secrets or 'SERVICE_ACCOUNT' in st.secrets or 'service_account' in st.secrets):
+        for key in ('gcp_service_account', 'SERVICE_ACCOUNT', 'service_account'):
+            if key in st.secrets:
+                service_info = st.secrets[key]
+                break
+
+    service_file = os.environ.get('SERVICE_ACCOUNT_FILE')
+
+    if (sheet_id) and (service_info or (service_file and os.path.exists(service_file))):
+        try:
+            import gspread
+            try:
+                from google.oauth2.service_account import Credentials
+            except Exception:
+                Credentials = None
+
+            scopes = ['https://www.googleapis.com/auth/spreadsheets']
+
+            if service_info:
+                if isinstance(service_info, str):
+                    try:
+                        service_info = json.loads(service_info)
+                    except Exception:
+                        pass
+                creds = Credentials.from_service_account_info(
+                    service_info, scopes=scopes)
+            else:
+                creds = Credentials.from_service_account_file(
+                    service_file, scopes=scopes)
+
+            gc = gspread.authorize(creds)
+            sh = gc.open_by_key(sheet_id)
+            ws = sh.sheet1
+
+            # Build header from keys of first row (fallback to previous header)
+            if not data:
+                ws.clear()
+                return
+
+            # Determine all unique keys to use as columns (preserve order-ish)
+            keys = []
+            for item in data:
+                for k in item.keys():
+                    if k not in keys:
+                        keys.append(k)
+
+            # Prepare rows
+            rows = [keys]
+            for item in data:
+                row = [item.get(k, '') if item.get(k, '')
+                       is not None else '' for k in keys]
+                rows.append(row)
+
+            ws.clear()
+            ws.update(rows)
+            return
+        except Exception as e:
+            st.warning(
+                f"Could not save to Google Sheets: {e}. Saving to data.json instead.")
+            _save_to_json(data)
+            return
+
+    # Default fallback
+    _save_to_json(data)
 
 # Main app
 
