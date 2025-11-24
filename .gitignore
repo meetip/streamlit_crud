@@ -132,3 +132,9 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+ 
+# Local Streamlit secrets (do NOT commit)
+.streamlit/secrets.toml
+
+# Local data file
+data.json
